@@ -1,3 +1,15 @@
+// phone_net.ino  (with watchdog)
+// ESP32-S3 USB keyboard + mouse for an Android phone, controlled over Wi-Fi.
+// The computer sends one text command per line over TCP; the board replies
+// "ok" or "ok <data>" or "err <reason>". All logic lives on the computer.
+//
+// Board options: keep the SAME board and USB settings you used for the HID
+// sketch that worked (USB Mode: USB-OTG (TinyUSB), USB CDC On Boot: Disabled).
+
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ESPmDNS.h>
+#include <esp_task_wdt.h>
 #include "USB.h"
 #include "USBHIDKeyboard.h"
 #include "USBHIDMouse.h"
@@ -7,43 +19,91 @@ USBHIDKeyboard Keyboard;
 USBHIDMouse Mouse;
 USBHIDConsumerControl Consumer;
 
-// ==========================================
+
 // SETTINGS
-// ==========================================
-// 0 = CALIBRATE (measure how far the cursor moves per count)
-// 1 = VERIFY    (visit corners/center so you can check positions)
-// 2 = DEMO      (your original automation, now using pixel positions)
-#define MODE 2
 
-// Your phone's screen size in pixels. Find it with: adb shell wm size
-const int SCREEN_W = 720;    // from the touchscreen range in getevent (mtk-tpd)
-const int SCREEN_H = 1600;   // confirm with: adb shell wm size
+const char* WIFI_SSID = "home";      // must be 2.4 GHz
+const char* WIFI_PASS = "nickdaisy";
+const char* HOSTNAME  = "phonehid";            // reachable as phonehid.local
+const uint16_t PORT   = 7300;
 
-// Filled in after calibration: pixels moved per mouse "count".
-// Start at 1.0, then replace with the values MODE 0 helps you measure.
+// The board shouts "phonehid <ip> <port>" to the whole network on this UDP
+// port every few seconds. phone.py listens for it, so the computer can find
+// the board even when the .local name stops resolving.
+const uint16_t BEACON_PORT = 7301;
+const uint32_t BEACON_EVERY_MS = 3000;
+
+// ---- Watchdog settings ----
+// Hardware/task watchdog: reboot if loop() stops running for this long.
+// Must be longer than your slowest single command (a slow swipe is ~10 s at
+// the maximum step delay, but moveCounts() feeds the watchdog, so 10 is safe).
+const uint32_t WDT_TIMEOUT_S = 10;
+// Reboot if Wi-Fi stays disconnected this long (milliseconds).
+const uint32_t WIFI_DOWN_REBOOT_MS = 180000;
+// If the mouse button was left held and no command arrives for this long,
+// let go of it (milliseconds).
+const uint32_t HELD_RELEASE_MS = 15000;
+
+// Defaults only. The computer overwrites these with the `screen` and `gain`
+// commands when it connects, so you do not need to reflash per phone.
+int   SCREEN_W = 720;
+int   SCREEN_H = 1600;
 float PX_PER_COUNT_X = 3.81;
 float PX_PER_COUNT_Y = 3.81;
+int   REHOME_EVERY = 5;
 
-// Movement is sent in small constant-pace steps so Android's pointer
-// acceleration stays predictable. Do not change these after calibrating
-// (or recalibrate if you do).
-const int STEP_COUNTS   = 2;     // 2 counts every 10 ms = 200 counts/s
+// Constant-pace stepping keeps Android's pointer acceleration predictable.
+// Do not change these without recalibrating.
+const int STEP_COUNTS   = 2;
 const int STEP_DELAY_MS = 10;
 
-// Distance used by calibration. Kept small so the cursor does not hit the
-// screen edge (which would make the reading wrong).
-const int CAL_COUNTS = 100;
+// ==========================================
+// WATCHDOG
+// ==========================================
+inline void feed() { esp_task_wdt_reset(); }
 
-// Re-home the cursor into the top-left corner every N actions to
-// remove accumulated drift.
-const int REHOME_EVERY = 5;
+void setupWatchdog() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_task_wdt_config_t cfg;
+  cfg.timeout_ms     = WDT_TIMEOUT_S * 1000;
+  cfg.idle_core_mask = 0;        // do not watch the idle tasks
+  cfg.trigger_panic  = true;     // reset the chip when it fires
+  if (esp_task_wdt_reconfigure(&cfg) != ESP_OK) esp_task_wdt_init(&cfg);
+#else
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+#endif
+  esp_task_wdt_add(NULL);        // watch the loop() task
+}
 
-//cursor tracking
+const char* resetName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:  return "poweron";
+    case ESP_RST_SW:       return "software";
+    case ESP_RST_PANIC:    return "panic";
+    case ESP_RST_INT_WDT:  return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT:      return "wdt";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default:               return "other";
+  }
+}
 
-float curX = 0, curY = 0;                     // estimated position in pixels
-int actionsSinceHome = REHOME_EVERY;          // forces a home on first use
+// ==========================================
+// STATUS LED (Adafruit Feather NeoPixel, if the board has one)
+// red = no Wi-Fi, green = Wi-Fi up, blue = computer connected
+// ==========================================
+void led(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef PIN_NEOPIXEL
+  neopixelWrite(PIN_NEOPIXEL, r, g, b);
+#endif
+}
 
-// Move by a number of mouse counts at a constant pace.
+// ==========================================
+// CURSOR POSITION TRACKING (same method as phone_hid.ino)
+// ==========================================
+float curX = 0, curY = 0;
+int actionsSinceHome = 1000;     // forces a home on first use
+
 void moveCounts(long dx, long dy, int stepDelay = STEP_DELAY_MS) {
   while (dx != 0 || dy != 0) {
     int sx = (int)constrain(dx, -STEP_COUNTS, STEP_COUNTS);
@@ -52,15 +112,15 @@ void moveCounts(long dx, long dy, int stepDelay = STEP_DELAY_MS) {
     dx -= sx;
     dy -= sy;
     delay(stepDelay);
+    feed();                      // long moves must not trip the watchdog
   }
 }
 
-// Slam the cursor into the top-left corner. The screen edge stops it,
-// so this always gives a known position (0,0) no matter where it was.
 void homeCursor() {
   for (int i = 0; i < 60; i++) {
     Mouse.move(-127, -127, 0);
     delay(8);
+    feed();
   }
   curX = 0;
   curY = 0;
@@ -68,32 +128,22 @@ void homeCursor() {
   delay(150);
 }
 
-// Move the cursor to a pixel position on the screen.
 void moveToPx(int x, int y) {
   if (actionsSinceHome >= REHOME_EVERY) homeCursor();
   x = constrain(x, 0, SCREEN_W - 1);
   y = constrain(y, 0, SCREEN_H - 1);
   long dx = lround((x - curX) / PX_PER_COUNT_X);
   long dy = lround((y - curY) / PX_PER_COUNT_Y);
-  // Move one axis at a time. Android's pointer acceleration depends on speed,
-  // and a diagonal move is faster than the single-axis moves used to calibrate.
-  moveCounts(dx, 0);
+  moveCounts(dx, 0);          // one axis at a time so speed matches calibration
   moveCounts(0, dy);
   curX = x;
   curY = y;
   delay(80);
 }
 
+// ==========================================
 // GESTURES
-
-// Hold the left button down for a while at the current spot. Pointer location
-// draws a pressed pointer and shows its X/Y even when no cursor is visible.
-void markHere(int holdMs) {
-  Mouse.press(MOUSE_LEFT);
-  delay(holdMs);
-  Mouse.release(MOUSE_LEFT);
-}
-
+// ==========================================
 void tapAt(int x, int y) {
   moveToPx(x, y);
   Mouse.click(MOUSE_LEFT);
@@ -108,9 +158,7 @@ void doubleTapAt(int x, int y) {
   actionsSinceHome++;
 }
 
-// Press-and-drag from one point to another. Whether an Android app treats a
-// mouse drag as a swipe varies, so test it; scrollWheel() is the fallback.
-void swipePx(int x1, int y1, int x2, int y2, int stepDelay = 10) {
+void swipePx(int x1, int y1, int x2, int y2, int stepDelay) {
   moveToPx(x1, y1);
   Mouse.press(MOUSE_LEFT);
   delay(40);
@@ -118,129 +166,257 @@ void swipePx(int x1, int y1, int x2, int y2, int stepDelay = 10) {
              lround((y2 - y1) / PX_PER_COUNT_Y), stepDelay);
   delay(40);
   Mouse.release(MOUSE_LEFT);
-  // A different pace changes acceleration, so the position is now uncertain.
-  actionsSinceHome = REHOME_EVERY;
+  actionsSinceHome = REHOME_EVERY;   // diagonal + different speed: position unknown
 }
 
-// Mouse wheel scroll: negative = scroll content up, positive = down.
 void scrollWheel(int clicks) {
   Mouse.move(0, 0, (int8_t)clicks);
   delay(200);
 }
 
-void openPhoneSearch() {
-  Keyboard.press(KEY_LEFT_GUI);
-  delay(100);
+void tapKey(uint8_t k) {
+  Keyboard.press(k);
+  delay(60);
   Keyboard.releaseAll();
 }
 
-void pressBack() {
-  Keyboard.press(KEY_ESC);
-  delay(100);
+bool pressNamedKey(const String& n) {
+  if (n == "enter")          tapKey(KEY_RETURN);
+  else if (n == "esc" || n == "back") tapKey(KEY_ESC);
+  else if (n == "tab")       tapKey(KEY_TAB);
+  else if (n == "backspace") tapKey(KEY_BACKSPACE);
+  else if (n == "space")     tapKey(' ');
+  else if (n == "up")        tapKey(KEY_UP_ARROW);
+  else if (n == "down")      tapKey(KEY_DOWN_ARROW);
+  else if (n == "left")      tapKey(KEY_LEFT_ARROW);
+  else if (n == "right")     tapKey(KEY_RIGHT_ARROW);
+  else if (n == "gui")       tapKey(KEY_LEFT_GUI);
+  else if (n == "vol_up")   { Consumer.press(CONSUMER_CONTROL_VOLUME_INCREMENT); Consumer.release(); }
+  else if (n == "vol_down") { Consumer.press(CONSUMER_CONTROL_VOLUME_DECREMENT); Consumer.release(); }
+  else return false;
+  return true;
+}
+
+bool buttonHeld = false;         // set by the `press` command
+uint32_t lastCmdMs = 0;          // time of the last command received
+uint32_t wifiDrops = 0;          // how many times Wi-Fi went down since boot
+
+void releaseAll() {
+  Mouse.release(MOUSE_LEFT);
   Keyboard.releaseAll();
+  buttonHeld = false;
 }
 
 // ==========================================
-// MODE 0: CALIBRATION
+// NETWORK + COMMAND HANDLING
 // ==========================================
-// Turn on Developer options -> "Pointer location" first. It shows the live
-// X and Y of the pointer at the top of the screen.
-// The cursor goes to the corner, moves exactly 500 counts to the right,
-// then waits 10 s. Read X. Then it does the same downward. Read Y.
-//   PX_PER_COUNT_X = (X you read) / CAL_COUNTS   (CAL_COUNTS = 100)
-//   PX_PER_COUNT_Y = (Y you read) / CAL_COUNTS
-void runCalibration() {
-  homeCursor();
-  delay(2000);
-  moveCounts(CAL_COUNTS, 0);       // X test
-  markHere(10000);          // hold the button: read X on Pointer location
-  delay(1000);
+WiFiServer server(PORT);
+WiFiClient client;
+String rx;
+bool wifiUp = false;
+bool serverStarted = false;
 
-  homeCursor();
-  delay(2000);
-  moveCounts(0, CAL_COUNTS);       // Y test
-  markHere(10000);          // hold the button: read Y on Pointer location
-  delay(1000);
+void reply(const String& s) {
+  if (client && client.connected()) client.println(s);
 }
 
-// ==========================================
-// MODE 1: VERIFY
-// ==========================================
-// Visits five points. Compare where the cursor stops with the target
-// and the X/Y shown by Pointer location.
-void runVerify() {
-  const int m = 100;  // margin from the edges
-  const int pts[5][2] = {
-    {m, m}, {SCREEN_W - m, m}, {SCREEN_W / 2, SCREEN_H / 2},
-    {m, SCREEN_H - m}, {SCREEN_W - m, SCREEN_H - m}
-  };
-  for (int i = 0; i < 5; i++) {
-    homeCursor();                 // re-home each time to test absolute accuracy
-    moveToPx(pts[i][0], pts[i][1]);
-    markHere(4000);               // hold the button so Pointer location draws it
-    delay(1000);
+void handle(String line) {
+  line.trim();
+  if (line.length() == 0) return;
+  lastCmdMs = millis();
+  const char* s = line.c_str();
+  int a, b, c, d, e = 10;
+  float f, g;
+
+  if (line == "ping") {
+    reply("ok");
+  } else if (line == "home") {
+    homeCursor();
+    reply("ok");
+  } else if (sscanf(s, "tap %d %d", &a, &b) == 2) {
+    tapAt(a, b);
+    reply("ok");
+  } else if (sscanf(s, "dtap %d %d", &a, &b) == 2) {
+    doubleTapAt(a, b);
+    reply("ok");
+  } else if (sscanf(s, "swipe %d %d %d %d %d", &a, &b, &c, &d, &e) >= 4) {
+    swipePx(a, b, c, d, constrain(e, 2, 50));
+    reply("ok");
+  } else if (sscanf(s, "scroll %d", &a) == 1) {
+    scrollWheel(constrain(a, -127, 127));
+    reply("ok");
+  } else if (line.startsWith("type ")) {
+    Keyboard.print(line.substring(5));
+    reply("ok");
+  } else if (line.startsWith("key ")) {
+    String name = line.substring(4);
+    name.trim();
+    if (pressNamedKey(name)) reply("ok"); else reply("err unknown key");
+  } else if (line == "press") {
+    Mouse.press(MOUSE_LEFT);
+    buttonHeld = true;
+    reply("ok");
+  } else if (line == "release") {
+    Mouse.release(MOUSE_LEFT);
+    buttonHeld = false;
+    reply("ok");
+  } else if (line == "click") {
+    Mouse.click(MOUSE_LEFT);
+    reply("ok");
+  } else if (sscanf(s, "move %d %d", &a, &b) == 2) {
+    moveCounts(a, 0);
+    moveCounts(0, b);
+    curX = constrain(curX + a * PX_PER_COUNT_X, 0, SCREEN_W - 1);
+    curY = constrain(curY + b * PX_PER_COUNT_Y, 0, SCREEN_H - 1);
+    reply("ok");
+  } else if (line == "pos") {
+    reply("ok " + String((int)curX) + " " + String((int)curY));
+  } else if (line == "ip") {
+    reply("ok " + WiFi.localIP().toString());
+  } else if (line == "status") {
+    // Why did it drop out? reset= tells you what caused the last reboot:
+    // brownout = power problem, task_wdt = firmware hung, poweron = just plugged in.
+    reply("ok uptime=" + String(millis() / 1000) +
+          " reset=" + String(resetName(esp_reset_reason())) +
+          " rssi=" + String(WiFi.RSSI()) +
+          " wifidrops=" + String(wifiDrops) +
+          " heap=" + String(ESP.getFreeHeap()));
+  } else if (line == "reboot") {
+    reply("ok");
+    delay(200);
+    releaseAll();
+    ESP.restart();
+  } else if (line == "hang") {
+    // TESTING ONLY: freezes the firmware so you can watch the watchdog reboot it.
+    reply("ok");
+    while (true) { }
+  } else if (sscanf(s, "screen %d %d", &a, &b) == 2 && a > 0 && b > 0) {
+    SCREEN_W = a;
+    SCREEN_H = b;
+    actionsSinceHome = 1000;
+    reply("ok");
+  } else if (sscanf(s, "gain %f %f", &f, &g) == 2 && f > 0 && g > 0) {
+    PX_PER_COUNT_X = f;
+    PX_PER_COUNT_Y = g;
+    reply("ok");
+  } else if (sscanf(s, "rehome %d", &a) == 1 && a > 0) {
+    REHOME_EVERY = a;
+    reply("ok");
+  } else {
+    reply("err unknown command");
   }
 }
 
-// ==========================================
-// MODE 2: DEMO (your original sequence)
-// ==========================================
-void runDemo() {
-  Consumer.press(CONSUMER_CONTROL_VOLUME_INCREMENT);
-  Consumer.release();
-  delay(1000);
+void wifiTick() {
+  static uint32_t lastTry = 0;
+  static uint32_t downSince = 0;
+  bool connected = (WiFi.status() == WL_CONNECTED);
 
-  openPhoneSearch();
-  delay(1500);
-
-  Keyboard.print("Notes");
-  delay(1000);
-  // Keyboard.write(KEY_RETURN);
-  tapAt(100,260);
-  delay(3000);
-
-  tapAt(600, 1334); //tap at plus in notes
-  delay(3000);
-
-  tapAt(589, 1197); 
-  delay(3000);
-
-  while (true) {
-    Keyboard.println("HELLO");
-    delay(2000);
+  if (connected && !wifiUp) {
+    wifiUp = true;
+    MDNS.end();
+    MDNS.begin(HOSTNAME);
+    if (!serverStarted) { server.begin(); serverStarted = true; }
+    led(0, 20, 0);
   }
-  // Keyboard.println("HELLO");
-  // delay(2000);
+  if (!connected && wifiUp) {
+    wifiUp = false;
+    wifiDrops++;
+    releaseAll();
+    led(20, 0, 0);
+  }
 
-  // scrollWheel(-3);                          // scroll by wheel
-  // delay(1000);
-  // swipePx(SCREEN_W / 2, SCREEN_H * 3 / 4,   // swipe up from lower-middle
-  //         SCREEN_W / 2, SCREEN_H / 4);
-  // delay(2000);
+  // Link watchdog: if Wi-Fi stays down too long, a clean reboot is the most
+  // reliable way back onto the network.
+  if (connected) {
+    downSince = 0;
+  } else {
+    if (downSince == 0) downSince = millis();
+    if (millis() - downSince > WIFI_DOWN_REBOOT_MS) {
+      releaseAll();
+      delay(100);
+      ESP.restart();
+    }
+  }
 
-  // doubleTapAt(SCREEN_W / 2, SCREEN_H / 2);  // double tap the center
-  // delay(2000);
-
-  // pressBack();
-  // delay(30000);
+  if (!connected && millis() - lastTry > 15000) {
+    lastTry = millis();
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
 }
 
-// ==========================================
+WiFiUDP beaconUdp;
+
+void beaconTick() {
+  static uint32_t last = 0;
+  if (!wifiUp || millis() - last < BEACON_EVERY_MS) return;
+  last = millis();
+  IPAddress ip = WiFi.localIP();
+  IPAddress mask = WiFi.subnetMask();
+  IPAddress bc(ip[0] | (uint8_t)~mask[0], ip[1] | (uint8_t)~mask[1],
+               ip[2] | (uint8_t)~mask[2], ip[3] | (uint8_t)~mask[3]);
+  beaconUdp.beginPacket(bc, BEACON_PORT);
+  beaconUdp.print("phonehid " + ip.toString() + " " + String(PORT));
+  beaconUdp.endPacket();
+}
+
+void pollClient() {
+  if (wifiUp) {
+    WiFiClient nc = server.accept();       // on older cores use server.available()
+    if (nc) {
+      if (client) client.stop();
+      client = nc;
+      client.setNoDelay(true);
+      rx = "";
+      led(0, 0, 20);
+    }
+  }
+  if (client && !client.connected()) {
+    client.stop();
+    releaseAll();                          // never leave the button held
+    led(0, 20, 0);
+  }
+  if (client) {
+    while (client.available()) {
+      char ch = client.read();
+      if (ch == '\n') { handle(rx); rx = ""; }
+      else if (ch != '\r' && rx.length() < 200) rx += ch;
+    }
+  }
+}
+
 void setup() {
   Keyboard.begin();
   Mouse.begin();
   Consumer.begin();
   USB.begin();
-  delay(8000);   // time to plug into the phone
+
+#ifdef NEOPIXEL_POWER
+  pinMode(NEOPIXEL_POWER, OUTPUT);
+  digitalWrite(NEOPIXEL_POWER, HIGH);
+#endif
+  led(20, 0, 0);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.setSleep(false);                    // lower latency
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  lastCmdMs = millis();
+  setupWatchdog();                         // last, so setup() itself is not watched
 }
 
 void loop() {
-#if MODE == 0
-  runCalibration();
-#elif MODE == 1
-  runVerify();
-#else
-  runDemo();
-#endif
-  delay(3000);
+  feed();                                  // proves loop() is still running
+  wifiTick();
+  beaconTick();
+  pollClient();
+
+  // Safety: a held mouse button with nobody commanding it gets released.
+  if (buttonHeld && millis() - lastCmdMs > HELD_RELEASE_MS) {
+    Mouse.release(MOUSE_LEFT);
+    buttonHeld = false;
+  }
+  delay(1);
 }
