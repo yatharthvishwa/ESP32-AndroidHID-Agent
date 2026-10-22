@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Control an Android phone: screenshots through ADB, touch and keyboard
-through the ESP32-S3 (phone_net.ino).
+# """Control an Android phone: screenshots through ADB, touch and keyboard
+# through the ESP32-S3 (phone_net.ino).
 
-    python phone.py test
-    python phone.py find                 # just locate the board and print its IP
-    python phone.py tap 360 800
-    python phone.py swipe 360 1200 360 400
-    python phone.py type "hello"
-    python phone.py key enter
-    python phone.py shot screen.png
-    python phone.py home
+#     python phone.py test
+#     python phone.py find                 # just locate the board and print its IP
+#     python phone.py tap 360 800
+#     python phone.py swipe 360 1200 360 400
+#     python phone.py type "hello"
+#     python phone.py key enter
+#     python phone.py shot screen.png
+#     python phone.py home
 
-Finding the board (nothing to configure): an explicit host (argument or the
-PHONE_HOST environment variable) is tried first, then the last IP that worked,
-then the phonehid.local name, then the board's UDP broadcast, then a scan of
-the local /24 network. The IP that works is remembered in ~/.phonehid_ip.
-"""
+# Finding the board (nothing to configure): an explicit host (argument or the
+# PHONE_HOST environment variable) is tried first, then the last IP that worked,
+# then the phonehid.local name, then the board's UDP broadcast, then a scan of
+# the local /24 network. The IP that works is remembered in ~/.phonehid_ip.
+# """
 import ipaddress
 import os
 import re
@@ -29,6 +29,27 @@ DEFAULT_NAME = "phonehid.local"
 DEFAULT_PORT = 7300
 BEACON_PORT = 7301
 CACHE_PATH = os.path.expanduser("~/.phonehid_ip")
+GAIN_PATH = os.path.expanduser("~/.phonehid_gain")
+
+
+def _read_gains():
+    """Return saved movement gains, or the original defaults if not saved."""
+    try:
+        with open(GAIN_PATH, "r", encoding="utf-8") as f:
+            parts = f.read().split()
+        if len(parts) == 2:
+            gx, gy = float(parts[0]), float(parts[1])
+            if 0.1 <= gx <= 100 and 0.1 <= gy <= 100:
+                return gx, gy
+    except (OSError, ValueError):
+        pass
+    return 3.81, 3.81
+
+
+def _write_gains(gx, gy):
+    """Save movement gains for future phone.py runs."""
+    with open(GAIN_PATH, "w", encoding="utf-8") as f:
+        f.write(f"{gx:.6g} {gy:.6g}\n")
 
 
 class PhoneError(Exception):
@@ -203,7 +224,7 @@ def find_board(host=None, port=DEFAULT_PORT, beacon_port=BEACON_PORT,
 
 class Phone:
     def __init__(self, host=None, port=DEFAULT_PORT, adb_serial=None,
-                 gain_x=3.81, gain_y=3.81, screen=None, rehome_every=5,
+                 gain_x=None, gain_y=None, screen=None, rehome_every=5,
                  timeout=30.0, beacon_port=BEACON_PORT, cache_path=CACHE_PATH,
                  beacon_wait=5.0, scan_prefix=None):
         self.host = host
@@ -217,6 +238,12 @@ class Phone:
         self._sock = None
         self._file = None
         self.ip = None
+        # Persist calibrated gains across separate phone.py invocations.
+        saved_x, saved_y = _read_gains()
+        if gain_x is None:
+            gain_x = saved_x
+        if gain_y is None:
+            gain_y = saved_y
         self._settings = (gain_x, gain_y, rehome_every)
         self.w, self.h = screen if screen else self.screen_size()
         self.connect()
@@ -400,6 +427,25 @@ def main(argv):
     if cmd == "find":
         print(find_board())
         return
+    # Configure runtime movement gains. Phone.connect() sends screen, gain,
+    # and rehome settings to the ESP32 when the connection is established.
+    if cmd == "gain":
+        if len(args) != 2:
+            raise PhoneError("usage: python3 phone.py gain <x_gain> <y_gain>")
+        try:
+            gx, gy = float(args[0]), float(args[1])
+        except ValueError:
+            raise PhoneError("gain values must be numbers")
+        if not (0.1 <= gx <= 100 and 0.1 <= gy <= 100):
+            raise PhoneError("gain values must be between 0.1 and 100")
+        try:
+            _write_gains(gx, gy)
+        except OSError as e:
+            raise PhoneError(f"could not save gains to {GAIN_PATH}: {e}")
+        p = Phone(gain_x=gx, gain_y=gy)
+        print("gain:", p.status())
+        return
+
     p = Phone()
     if cmd == "tap":
         p.tap(float(args[0]), float(args[1]))

@@ -10,6 +10,7 @@
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
 #include <esp_task_wdt.h>
+#include <math.h>
 #include "USB.h"
 #include "USBHIDKeyboard.h"
 #include "USBHIDMouse.h"
@@ -44,13 +45,14 @@ const uint32_t WIFI_DOWN_REBOOT_MS = 180000;
 // let go of it (milliseconds).
 const uint32_t HELD_RELEASE_MS = 15000;
 
-// Defaults only. The computer overwrites these with the `screen` and `gain`
-// commands when it connects, so you do not need to reflash per phone.
-int   SCREEN_W = 720;
-int   SCREEN_H = 1600;
-float PX_PER_COUNT_X = 3.81;
-float PX_PER_COUNT_Y = 3.81;
+// Runtime configuration. Python must send `screen` and `gain` after connecting.
+// Zero values deliberately prevent accidental use of another phone's settings.
+int   SCREEN_W = 0;
+int   SCREEN_H = 0;
+float PX_PER_COUNT_X = 0.0f;
+float PX_PER_COUNT_Y = 0.0f;
 int   REHOME_EVERY = 5;
+bool  phoneConfigured = false;
 
 // Constant-pace stepping keeps Android's pointer acceleration predictable.
 // Do not change these without recalibrating.
@@ -228,8 +230,20 @@ void handle(String line) {
   int a, b, c, d, e = 10;
   float f, g;
 
+  // Commands that depend on screen coordinates are rejected until Python has
+  // supplied valid dimensions and calibrated gains. Config/status commands remain available.
+  if (!phoneConfigured && (
+      line.startsWith("tap ") || line.startsWith("dtap ") ||
+      line.startsWith("swipe ") || line.startsWith("move ")
+  )) {
+    reply("err phone not configured; send screen and gain first");
+    return;
+  }
+
   if (line == "ping") {
     reply("ok");
+  } else if (line == "capabilities") {
+    reply("ok firmware=2 hid=mouse,keyboard,consumer config=runtime screen=required gain=required");
   } else if (line == "home") {
     homeCursor();
     reply("ok");
@@ -280,7 +294,10 @@ void handle(String line) {
           " reset=" + String(resetName(esp_reset_reason())) +
           " rssi=" + String(WiFi.RSSI()) +
           " wifidrops=" + String(wifiDrops) +
-          " heap=" + String(ESP.getFreeHeap()));
+          " heap=" + String(ESP.getFreeHeap()) +
+          " configured=" + String(phoneConfigured ? 1 : 0) +
+          " screen=" + String(SCREEN_W) + "x" + String(SCREEN_H) +
+          " gain=" + String(PX_PER_COUNT_X, 3) + "," + String(PX_PER_COUNT_Y, 3));
   } else if (line == "reboot") {
     reply("ok");
     delay(200);
@@ -290,16 +307,27 @@ void handle(String line) {
     // TESTING ONLY: freezes the firmware so you can watch the watchdog reboot it.
     reply("ok");
     while (true) { }
-  } else if (sscanf(s, "screen %d %d", &a, &b) == 2 && a > 0 && b > 0) {
+  } else if (
+      sscanf(s, "screen %d %d", &a, &b) == 2 &&
+      a >= 200 && a <= 20000 && b >= 200 && b <= 20000
+  ) {
     SCREEN_W = a;
     SCREEN_H = b;
-    actionsSinceHome = 1000;
+    curX = 0;
+    curY = 0;
+    actionsSinceHome = 1000;  // force a fresh home after reconfiguration
+    phoneConfigured = (PX_PER_COUNT_X > 0.0f && PX_PER_COUNT_Y > 0.0f);
     reply("ok");
-  } else if (sscanf(s, "gain %f %f", &f, &g) == 2 && f > 0 && g > 0) {
+  } else if (
+      sscanf(s, "gain %f %f", &f, &g) == 2 &&
+      isfinite(f) && isfinite(g) &&
+      f >= 0.1f && f <= 100.0f && g >= 0.1f && g <= 100.0f
+  ) {
     PX_PER_COUNT_X = f;
     PX_PER_COUNT_Y = g;
+    phoneConfigured = (SCREEN_W > 0 && SCREEN_H > 0);
     reply("ok");
-  } else if (sscanf(s, "rehome %d", &a) == 1 && a > 0) {
+  } else if (sscanf(s, "rehome %d", &a) == 1 && a >= 1 && a <= 100) {
     REHOME_EVERY = a;
     reply("ok");
   } else {
