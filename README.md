@@ -189,8 +189,8 @@ open("screen.png", "wb").write(p.screenshot())
 ## Documentation
 
 - [Full documentation](docs/DOCUMENTATION.md): how it works, calibration, agent internals
-- [Command protocol](internals/PROTOCOL.md): talk to the board with `nc`
-- [Troubleshooting](internals/TROUBLESHOOTING.md)
+- [Command protocol](docs/PROTOCOL.md): talk to the board with `nc`
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## Credits
 
