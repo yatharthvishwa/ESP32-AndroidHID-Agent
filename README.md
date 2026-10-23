@@ -6,6 +6,8 @@ ShrikeFi (esp32s3 + FPGA) plugs into the phone's USB port and shows up as an ord
 
 This is an Android port of the `esp32-iphone-agent` idea.
 
+[Watch the demo here! :)](https://youtube.com/shorts/4fgWQStbVU4)
+
 ```
                        Wi-Fi (TCP :7300, UDP beacon :7301)
   ┌──────────────────┐ ───────────────────────────────────►  ┌────────────────┐   USB (HID)   ┌─────────────┐
