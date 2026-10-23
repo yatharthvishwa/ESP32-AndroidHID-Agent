@@ -167,7 +167,3 @@ open("screen.png", "wb").write(p.screenshot())
 ## Credits
 
 Based on the `esp32-iphone-agent` project idea. Built on the Arduino-ESP32 USB HID libraries, ADB, OpenCV, and the OpenRouter API.
-
-## License
-
-Add your license here (MIT is a common choice for projects like this).
