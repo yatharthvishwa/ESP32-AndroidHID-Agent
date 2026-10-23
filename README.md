@@ -29,10 +29,10 @@ This is an Android port of the `esp32-iphone-agent` idea.
 
 - **An ESP32-S3 board with native USB.** I'm using the **Shrike-Fi** board, but any ESP32-S3 works as long as the USB port you plug into the phone is wired to the chip's native USB (a plain ESP32, or a UART-bridge-only connection, cannot act as a USB keyboard/mouse).
 - A USB-C cable (or OTG adapter) to connect the board to the phone.
-- An Android phone with **USB debugging** enabled and a mouse-capable USB host port (virtually all of them).
+- An Android phone (Android 11 or newer) with **Developer options** and **Wireless debugging** enabled, and a USB host port that accepts a mouse/keyboard (virtually all of them).
 - A computer on the **same 2.4 GHz Wi-Fi network** as the board, with [ADB](https://developer.android.com/tools/releases/platform-tools) installed.
 
-> The phone's USB port is occupied by the ESP32, so ADB normally runs over Wi-Fi (**Developer options → Wireless debugging**, then `adb pair` / `adb connect`). If you have a second path to the phone (e.g. a dock), USB ADB also works. `phone.py` just calls `adb`, so use whatever makes `adb devices` show your phone. If several devices are attached, pass `adb_serial` to `Phone(...)`.
+> The phone's USB port is occupied by the ESP32, so ADB runs over Wi-Fi using Android's **Wireless debugging**. See [step 1b](#1b-connect-adb-over-wi-fi) below. If several devices are connected to ADB, pass `adb_serial="<ip>:<port>"` to `Phone(...)`.
 
 ## Quick start
 
