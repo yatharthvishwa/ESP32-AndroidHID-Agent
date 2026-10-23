@@ -1,4 +1,4 @@
-# esp32-android-agent
+# ESP32-AndroidHID-Agent
 
 Let an AI model use a **real Android phone**, with no app installed on the phone and no root.
 
