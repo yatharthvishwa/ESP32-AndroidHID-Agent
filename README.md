@@ -59,6 +59,34 @@ This is an Android port of the `esp32-iphone-agent` idea.
 
 To confirm the board joined Wi-Fi, look for `phonehid` in your router's client list, or run `python phone.py find`.
 
+### 1b. Connect ADB over Wi-Fi
+
+The computer takes screenshots through ADB. Because the ESP32 is plugged into the phone's USB port, ADB connects over Wi-Fi instead. The phone and the computer must be on the **same Wi-Fi network**.
+
+**On the phone (one-time setup):**
+
+1. Turn on **Developer options**: *Settings → About phone*, then tap **Build number** 7 times. On some phones it's under *Software information*.
+2. Open *Settings → System → Developer options* and turn on **Wireless debugging**. If it asks to allow wireless debugging on this network, allow it.
+3. Tap **Wireless debugging**, then **Pair device with pairing code**. The phone shows a pairing `IP:port` and a 6-digit code. Keep this screen open.
+
+**On the computer:**
+
+```bash
+# 1. Pair (once). Use the PAIRING ip:port from the phone, then type the 6-digit code.
+adb pair 192.168.1.50:37123
+
+# 2. Connect. Use the IP address & Port shown on the main Wireless debugging screen.
+#    This port is different from the pairing port.
+adb connect 192.168.1.50:41567
+
+# 3. Check
+adb devices
+```
+
+`adb devices` should show your phone as `device`. The IPs and ports above are examples; use your own.
+
+Pairing is only needed once. The connection port changes whenever Wireless debugging is turned off and on, the phone reboots, or it changes Wi-Fi network. When that happens, read the new port from the Wireless debugging screen and run `adb connect` again (no need to pair again).
+
 ### 2. Install the Python side
 
 ```bash
