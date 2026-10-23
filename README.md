@@ -2,7 +2,7 @@
 
 Let an AI model use a **real Android phone**, with no app installed on the phone and no root.
 
-An ESP32-S3 plugs into the phone's USB port and shows up as an ordinary **USB mouse + keyboard**. Your computer takes screenshots over **ADB**, sends them to a vision model, and tells the ESP32 (over Wi-Fi) where to tap, swipe and type.
+ShrikeFi (esp32s3 + FPGA) plugs into the phone's USB port and shows up as an ordinary **USB mouse + keyboard**. Your computer takes screenshots over **ADB**, sends them to a vision model, and tells the ESP32 (over Wi-Fi) where to tap, swipe and type.
 
 This is an Android port of the `esp32-iphone-agent` idea.
 
