@@ -31,9 +31,12 @@ The board has restarted and forgot its screen size/gain. Reconnect with `phone.p
 
 ## ADB problems
 
-- `adb devices` must list your phone as `device` (not `unauthorized` or `offline`).
-- Since the ESP32 occupies the phone's USB port, use **Wireless debugging** (`adb pair`, then `adb connect <ip>:<port>`). The port changes when wireless debugging restarts.
-- "screencap did not return a PNG": ADB isn't connected, or several devices are attached (pass `adb_serial`).
+- `adb devices` must list your phone as `device` (not `unauthorized` or `offline`, and not empty).
+- The ESP32 occupies the phone's USB port, so ADB uses **Wireless debugging**: enable Developer options (tap *Build number* 7 times), turn on Wireless debugging, then `adb pair <ip>:<pairing_port>` (once) and `adb connect <ip>:<port>`. See the README, step 1b.
+- `adb connect` fails or the device disappears: the **port changed** (it changes when Wireless debugging is toggled, the phone reboots, or the Wi-Fi network changes). Read the new `IP address & Port` on the phone's Wireless debugging screen and `adb connect` again.
+- `adb pair` fails: the pairing code and pairing port expire, so reopen *Pair device with pairing code* on the phone and use the fresh values.
+- The phone and computer must be on the same network, and some routers block device-to-device traffic ("client isolation").
+- "screencap did not return a PNG": ADB isn't connected, or several devices are attached (pass `adb_serial="<ip>:<port>"`).
 - Some banking/secure apps block screenshots and return a black screen.
 
 ## Board keeps rebooting / dropping out
