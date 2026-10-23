@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # """Control an Android phone: screenshots through ADB, touch and keyboard
-# through the ESP32-S3 (phone_net.ino).
+# through the ESP32-S3
 
 #     python phone.py test
 #     python phone.py find                 # just locate the board and print its IP
@@ -218,7 +218,7 @@ def find_board(host=None, port=DEFAULT_PORT, beacon_port=BEACON_PORT,
             tried.append(f"scan of {prefix}0/24 found nothing")
 
     raise PhoneError("cannot find the board. Tried: " + "; ".join(tried) +
-                     ". Check the board's LED (red = no Wi-Fi) and that this "
+                     ". Check the board that this "
                      "computer is on the same Wi-Fi network.")
 
 

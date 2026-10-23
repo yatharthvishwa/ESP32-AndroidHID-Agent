@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Android HID Calibration</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <header><div><h1>Android HID Calibration</h1><p>ESP32 mouse gain calibration using ADB screenshots</p></div><span id="connection" class="pill">Connecting…</span></header>
+    <section class="panel">
+      <div class="actions"><button id="start">Automatic calibration</button><button id="manual" class="secondary">Use manual fallback</button><button id="home" class="secondary">Home cursor</button></div>
+      <div class="progress"><div id="bar"></div></div>
+      <p id="status">Checking phone and ESP32…</p>
+      <p class="hint">When a calibration point appears, click the <b>center of the mouse cursor</b> in the screenshot. The cursor may disappear after a pause, so click promptly. This process moves the pointer only; it does not tap the phone screen.</p>
+    </section>
+    <section class="panel preview-panel">
+      <div class="preview-head"><h2>Live Android screenshot</h2><span id="dimensions"></span></div>
+      <div class="frame-wrap"><img id="frame" alt="Android screen; click the cursor only if automatic detection pauses"><div id="overlay">Press “Start calibration”</div></div>
+      <p class="hint">Keep the phone screen still during calibration. If automatic detection pauses, click the cursor itself—not the icon beneath it—to continue manually.</p>
+    </section>
+    <section class="panel"><h2>Calibration results</h2><div class="metrics"><div><small>X gain (pixels per HID count)</small><strong id="gx">—</strong></div><div><small>Y gain (pixels per HID count)</small><strong id="gy">—</strong></div></div><p id="result" class="hint">Existing settings are shown here. A successful calibration saves <code>calibration.json</code>.</p></section>
+    <footer>Keep the phone on a stable screen during calibration. Do not touch the phone or move another mouse until it finishes.</footer>
+  </main>
+  <script src="/app.js"></script>
+</body></html>

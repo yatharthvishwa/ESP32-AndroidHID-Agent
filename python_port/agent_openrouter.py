@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Android phone agent using OpenRouter. Self-contained: needs only phone.py
-next to it. No Anthropic package or key involved.
+"""Android phone agent using OpenRouter
 
     pip install openai pillow
 
-Set these in the SAME terminal you run the script from:
+Set these in the same terminal you run the script from:
 
     Linux/macOS:
         export OPENROUTER_API_KEY=sk-or-...

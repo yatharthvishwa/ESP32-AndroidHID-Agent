@@ -90,15 +90,6 @@ const char* resetName(esp_reset_reason_t r) {
   }
 }
 
-// ==========================================
-// STATUS LED (Adafruit Feather NeoPixel, if the board has one)
-// red = no Wi-Fi, green = Wi-Fi up, blue = computer connected
-// ==========================================
-void led(uint8_t r, uint8_t g, uint8_t b) {
-#ifdef PIN_NEOPIXEL
-  neopixelWrite(PIN_NEOPIXEL, r, g, b);
-#endif
-}
 
 // ==========================================
 // CURSOR POSITION TRACKING (same method as phone_hid.ino)
@@ -345,13 +336,11 @@ void wifiTick() {
     MDNS.end();
     MDNS.begin(HOSTNAME);
     if (!serverStarted) { server.begin(); serverStarted = true; }
-    led(0, 20, 0);
   }
   if (!connected && wifiUp) {
     wifiUp = false;
     wifiDrops++;
     releaseAll();
-    led(20, 0, 0);
   }
 
   // Link watchdog: if Wi-Fi stays down too long, a clean reboot is the most
@@ -397,13 +386,11 @@ void pollClient() {
       client = nc;
       client.setNoDelay(true);
       rx = "";
-      led(0, 0, 20);
     }
   }
   if (client && !client.connected()) {
     client.stop();
     releaseAll();                          // never leave the button held
-    led(0, 20, 0);
   }
   if (client) {
     while (client.available()) {
@@ -419,12 +406,6 @@ void setup() {
   Mouse.begin();
   Consumer.begin();
   USB.begin();
-
-#ifdef NEOPIXEL_POWER
-  pinMode(NEOPIXEL_POWER, OUTPUT);
-  digitalWrite(NEOPIXEL_POWER, HIGH);
-#endif
-  led(20, 0, 0);
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);

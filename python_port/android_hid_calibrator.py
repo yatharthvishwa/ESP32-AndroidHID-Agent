@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local browser calibration UI for phone.py + phone_net.ino / hid_interface.ino.
+"""Local browser calibration UI 
 
 Uses OpenCV for screenshot-difference cursor detection. Manual click fallback remains available.
 No taps/clicks are sent to Android during calibration; only mouse movement is sent.
