@@ -25,7 +25,7 @@ This is an Android port of the `esp32-iphone-agent` idea.
 | **Hands** | ESP32-S3 | USB HID mouse, keyboard, media keys |
 | **Brain** | Any vision + tool-calling model on [OpenRouter](https://openrouter.ai) | `agent_openrouter.py` |
 
-> ⚠️ **This controls a real device.** The agent can open apps, type, and tap anything on screen. Use a spare/test phone, stay nearby on first runs, and read [Safety](#safety).
+> **This controls a real device.** The agent can open apps, type, and tap anything on screen. Use a spare/test phone, stay nearby on first runs, and read [Safety](#safety).
 
 ## Hardware
 
